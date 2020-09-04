@@ -268,6 +268,7 @@ pub struct FileInfo {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct SubFile {
     pub offset: u32,
     pub compressed_size: u32,
@@ -415,9 +416,7 @@ impl LoadedTables {
             .get(t1_index as usize)
             .ok_or(LoadError::NoTable1)?;
         let t2_index = t1.table2_index as usize;
-        self.table_2()
-            .get(t2_index)
-            .ok_or(LoadError::NoTable2)
+        self.table_2().get(t2_index).ok_or(LoadError::NoTable2)
     }
 
     pub fn get_t2_mut(&mut self, t1_index: u32) -> Result<&mut Table2Entry, LoadError> {
@@ -431,7 +430,6 @@ impl LoadedTables {
             .ok_or(LoadError::NoTable2)
     }
 }
-
 
 #[derive(Copy, Clone, Debug)]
 pub enum LoadError {
@@ -480,7 +478,7 @@ pub struct ResServiceState {
     unk10: u8,
     pub data_arc_string: [u8; 256],
     unk11: *const (),
-    pub data_arc_filenx: *mut FileNX,
+    pub data_arc_filenx: *mut *mut FileNX,
     pub buffer_size: usize,
     pub buffer_array: [*const skyline::libc::c_void; 2],
     pub buffer_array_idx: u32,
@@ -488,4 +486,18 @@ pub struct ResServiceState {
     pub data_ptr: *const skyline::libc::c_void,
     pub offset_into_read: u64,
     //Still need to add some
+}
+
+impl ResServiceState {
+    pub fn get_instance() -> &'static mut Self {
+        unsafe {
+            let instance_ptr: *mut &'static mut Self =
+                std::mem::transmute(offset_to_addr(0x4ee4228));
+            *instance_ptr
+        }
+    }
+
+    pub fn get_arc_handle(&self) -> *const nn::fs::FileHandle {
+        unsafe { (*(*self.data_arc_filenx)).file_handle }
+    }
 }

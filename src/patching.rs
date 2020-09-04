@@ -50,7 +50,8 @@ static PARSE_EFF_SEARCH_CODE: &[u8] = &[
 ];
 
 static RES_SERVICE_INITIALIZED_CODE: &[u8] = &[
-    0x09, 0x01, 0x40, 0xf9, 0x28, 0x39, 0x40, 0xf9, 0x29, 0x21, 0x40, 0xf9, 0x2a, 0x0d, 0x40, 0xb9, 0x09, 0x0d, 0x0a, 0x8b, 0xaa, 0x01, 0x00, 0x34,
+    0x09, 0x01, 0x40, 0xf9, 0x28, 0x39, 0x40, 0xf9, 0x29, 0x21, 0x40, 0xf9, 0x2a, 0x0d, 0x40, 0xb9,
+    0x09, 0x0d, 0x0a, 0x8b, 0xaa, 0x01, 0x00, 0x34,
 ];
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -161,11 +162,6 @@ pub fn filesize_replacement() {
 
         unsafe {
             let extension = path.as_path().extension().unwrap().to_str().unwrap();
-            // Some formats don't appreciate me messing with their size
-            match extension {
-                "bntx" | "nutexb" | "eff" | "numshexb" => {}
-                &_ => continue,
-            }
 
             let hashindexgroup_slice = slice::from_raw_parts(
                 loaded_tables.get_arc().file_info_path,
@@ -191,26 +187,17 @@ pub fn filesize_replacement() {
             let file = File::open(path).ok().unwrap();
             let metadata = file.metadata().ok().unwrap();
 
-            if (subfile.decompressed_size < metadata.len() as u32) && extension == "nutexb" {
-                // Is compressed?
-                if (subfile.flags & 0x3) == 3 {
-                    subfile.decompressed_size = metadata.len() as u32;
+            // Patch sizes
+            subfile.compressed_size = metadata.len() as u32;
+            subfile.decompressed_size = metadata.len() as u32;
+            // Remove compressed flag
+            subfile.flags &= !0x3;
 
-                    println!(
-                        "[ARC::Patching] New decompressed size for {}: {:#x}",
-                        path.as_path().display(),
-                        subfile.decompressed_size
-                    );
-                }
-            }
-            else if subfile.decompressed_size < metadata.len() as u32 {
-                subfile.decompressed_size = metadata.len() as u32;
-                println!(
-                    "[ARC::Patching] New decompressed size for {}: {:#x}",
-                    path.as_path().display(),
-                    subfile.decompressed_size
-                );
-            }
+            println!(
+                "[ARC::Patching] New decompressed size for {}: {:#x}",
+                path.as_path().display(),
+                subfile.decompressed_size
+            );
         }
     }
 }

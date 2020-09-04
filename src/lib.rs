@@ -1,6 +1,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(str_strip)]
 
+use std::ffi::CStr;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -10,18 +11,16 @@ use skyline::hooks::InlineCtx;
 use skyline::{hook, install_hooks, nn};
 
 mod hashes;
-mod stream;
-
 mod patching;
-use patching::{
-    ADD_IDX_TO_TABLE1_AND_TABLE2_OFFSET, IDK_OFFSET, PARSE_EFF_OFFSET, RES_SERVICE_INITIALIZED_OFFSET
-};
 
 mod replacement_files;
 use replacement_files::{ARC_FILES, STREAM_FILES};
 
 mod resource;
 use resource::*;
+
+mod stratus;
+use stratus::{ReadResult, STRATUS};
 
 mod config;
 use config::CONFIG;
@@ -36,183 +35,44 @@ macro_rules! log {
     };
 }
 
-fn handle_file_load(table1_idx: u32) {
-    let loaded_tables = LoadedTables::get_instance();
-    let mutex = loaded_tables.mutex;
-    let hash = loaded_tables.get_hash_from_t1_index(table1_idx).as_u64();
-    let internal_filepath = hashes::get(hash).unwrap_or(&"Unknown");
-
-    let mut table2entry = match loaded_tables.get_t2_mut(table1_idx) {
-        Ok(entry) => entry,
-        Err(_) => {
-            return;
-        }
-    };
-
-    log!(
-        "[ARC::Loading | #{}] File path: {}, Hash: {}, {}",
-        table1_idx,
-        internal_filepath,
-        hash,
-        table2entry
-    );
-
-    
-
-    // Println!() calls are on purpose so these show up no matter what.
-    if let Some(path) = ARC_FILES.get_from_hash(hash) {
-        println!(
-            "[ARC::Replace] Hash matching for file path: {}",
-            path.display()
-        );
-
-
-        // Some formats don't appreciate me replacing the data pointer
-        match path.as_path().extension().unwrap().to_str().unwrap() {
-            "nutexb" => {
-                handle_texture_files(table1_idx);
-                return;
-            },
-            "eff" => return,
-            &_ => (),
-        }
-
-        println!("[ARC::Replace] Replacing {}...", internal_filepath);
-
-        // This is a personal request, don't mind it too much.
-        if let Some(_) = CONFIG.misc.mowjoh {
-            skyline::error::show_error(
-                69,
-                &format!("[ARC::Replace] Replacing {}...", internal_filepath),
-                "Nothing to see here",
-            );
-        }
-
-        unsafe {
-            nn::os::LockMutex(mutex);
-        }
-
-        let data = fs::read(path).unwrap().into_boxed_slice();
-        let data = Box::leak(data);
-
-        table2entry.data = data.as_ptr();
-        table2entry.state = FileState::Loaded;
-        table2entry.flags = 43;
-
-        unsafe {
-            nn::os::UnlockMutex(mutex);
-        }
-
-        println!("[ARC::Replace] Table2 entry status: {}", table2entry);
-    }
-}
-
-fn handle_texture_files(table1_idx: u32) {
+#[hook(offset = 0x325b8e8, inline)]
+fn begin_loading(ctx: &InlineCtx) {
     unsafe {
-
-    let loaded_tables = LoadedTables::get_instance();
-    let mutex = loaded_tables.mutex;
-    let hash = loaded_tables.get_hash_from_t1_index(table1_idx).as_u64();
-    let internal_filepath = hashes::get(hash).unwrap_or(&"Unknown");
-
-    if let Some(path) = ARC_FILES.get_from_hash(hash) {
-        println!(
-            "[ARC::Replace] Hash matching for file path: {}",
-            path.display()
-        );
-
-        let table2entry = loaded_tables.get_t2(table1_idx).unwrap();
-
-        if table2entry.state != FileState::Loaded {
-            return;
-        }
-
-        println!("[ARC::Replace] Replacing {}...", internal_filepath);
-
-
-        let file = fs::read(path).unwrap();
-        let file_slice = file.as_slice();
-
-        let orig_size = loaded_tables.get_arc().get_subfile_by_t1_index(table1_idx).decompressed_size as usize;
-
-         let mut data_slice = std::slice::from_raw_parts_mut(table2entry.data as *mut u8, orig_size);
-        
-            if (orig_size > file_slice.len()) {
-                // Copy our new footer at the end
-                data_slice[orig_size - 0xB0..orig_size]
-                    .copy_from_slice(&file_slice[file_slice.len() - 0xB0..file_slice.len()]);
-                // Copy the content at the beginning
-                data_slice[0..file_slice.len() - 0xB0]
-                    .copy_from_slice(&file_slice[0..file_slice.len() - 0xB0]);
-            } else {
-                data_slice.write(file_slice);
-            }
-        }
-    }
-}
-
-#[hook(offset = IDK_OFFSET)]
-unsafe fn idk(res_state: *const ResServiceState, table1_idx: u32, flag_related: u32) {
-
-    log!("--- [Idk] ---");
-    handle_file_load(table1_idx);
-    original!()(res_state, table1_idx, flag_related);
-
-}
-
-#[hook(offset = ADD_IDX_TO_TABLE1_AND_TABLE2_OFFSET)]
-unsafe fn add_idx_to_table1_and_table2(loaded_table: *const LoadedTables, table1_idx: u32) {
-
-    log!("--- [AddIdx] ---");
-    handle_file_load(table1_idx);
-    original!()(loaded_table, table1_idx);
-
-}
-
-#[hook(offset = PARSE_EFF_OFFSET, inline)]
-fn parse_eff(ctx: &InlineCtx) {
-    unsafe {
-        let table1_idx = *ctx.registers[10].w.as_ref();
-        let loaded_tables = LoadedTables::get_instance();
-        let hash = loaded_tables.get_hash_from_t1_index(table1_idx).as_u64();
+        let t1_index = *ctx.registers[25].w.as_ref();
+        let hash = LoadedTables::get_instance()
+            .get_hash_from_t1_index(t1_index)
+            .as_u64();
         let internal_filepath = hashes::get(hash).unwrap_or(&"Unknown");
-        let t2_entry = loaded_tables
-            .get_t1_mut(table1_idx)
-            .unwrap()
-            .get_t2_entry()
-            .unwrap();
 
-        log!(
-            "[ARC::Loading | #{}] File path: {}, Hash: {}, {}",
-            table1_idx,
-            internal_filepath,
-            hash,
-            t2_entry
+        println!(
+            "[ARC::Loading | #{}] File path: {}, Hash: {}",
+            t1_index, internal_filepath, hash,
         );
 
-        if let Some(path) = ARC_FILES.get_from_hash(hash) {
-            println!(
-                "[ARC::Replace] Hash matching for file path: {}",
-                path.display()
-            );
-
-            println!("[ARC::Replace] Replacing {}...", internal_filepath);
-
-            let file = fs::read(path).unwrap();
-            let file_slice = file.as_slice();
-
-            let mut data_slice =
-                std::slice::from_raw_parts_mut(t2_entry.data as *mut u8, file_slice.len());
-
-            data_slice.write(file_slice);
+        if t1_index == 0xFFFFFF {
+            return;
         }
+
+        stratus!().handle_incoming_file(t1_index);
+    };
+}
+
+#[hook(replace = nn::fs::ReadFile2)]
+fn file_read_hook(
+    handle: *const nn::fs::FileHandle,
+    position: u64,
+    data: *const skyline::libc::c_void,
+    buffer_size: usize,
+) -> u32 {
+    match stratus!().handle_file_read(handle, position, data, buffer_size) {
+        ReadResult::Layered => 0,
+        _ => original!()(handle, position, data, buffer_size),
     }
 }
 
-#[hook(offset = RES_SERVICE_INITIALIZED_OFFSET, inline)]
-fn resource_service_initialized(ctx: &InlineCtx) {
-    // Patch filesizes in the Subfile table
-    patching::filesize_replacement();
+#[hook(offset = 0x325c1b0, inline)]
+fn inflate_loop_hook(ctx: &InlineCtx) {
+    stratus!().handle_inflate_thread_loop();
 }
 
 #[skyline::main(name = "arcropolis")]
@@ -221,28 +81,19 @@ pub fn main() {
     lazy_static::initialize(&CONFIG);
     lazy_static::initialize(&ARC_FILES);
     lazy_static::initialize(&STREAM_FILES);
+    lazy_static::initialize(&STRATUS);
 
     // Load hashes from rom:/skyline/hashes.txt if the file is present
     hashes::init();
     // Look for the offset of the various functions to hook
     patching::search_offsets();
-    // Not working so far, does not crash the game
-    //patching::shared_redirection();
-    // Attempt at expanding table2 (Does not work, do not use!)
-    //patching::expand_table2();
 
     // This is a personal request, don't mind it too much.
     if let Some(_) = CONFIG.misc.mowjoh {
         skyline::error::show_error(69, "I'm Mowjoh!", "No really, he is.");
     }
 
-    install_hooks!(
-        idk,
-        add_idx_to_table1_and_table2,
-        stream::lookup_by_stream_hash,
-        parse_eff,
-        resource_service_initialized,
-    );
+    install_hooks!(begin_loading, file_read_hook, inflate_loop_hook);
 
     println!(
         "ARCropolis v{} - File replacement plugin is now installed",
