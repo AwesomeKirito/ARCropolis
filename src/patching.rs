@@ -183,21 +183,25 @@ pub fn filesize_replacement() {
             };
 
             let mut subfile = loaded_tables.get_arc().get_subfile_by_t1_index(t1_index);
+            let mut file_info = loaded_tables
+                .get_arc()
+                .lookup_file_information_by_t1_index(t1_index);
+            file_info.flags ^= 0x10;
 
-            let file = File::open(path).ok().unwrap();
-            let metadata = file.metadata().ok().unwrap();
+            // let file = File::open(path).ok().unwrap();
+            // let metadata = file.metadata().ok().unwrap();
 
-            // Patch sizes
-            subfile.compressed_size = metadata.len() as u32;
-            subfile.decompressed_size = metadata.len() as u32;
-            // Remove compressed flag
-            subfile.flags &= !0x3;
+            // // Patch sizes
+            // subfile.compressed_size = metadata.len() as u32;
+            // subfile.decompressed_size = metadata.len() as u32;
+            // // Remove compressed flag
+            // subfile.flags &= !0x3;
 
-            println!(
-                "[ARC::Patching] New decompressed size for {}: {:#x}",
-                path.as_path().display(),
-                subfile.decompressed_size
-            );
+            // println!(
+            //     "[ARC::Patching] New decompressed size for {}: {:#x}",
+            //     path.as_path().display(),
+            //     subfile.decompressed_size
+            // );
         }
     }
 }

@@ -10,7 +10,7 @@ use crate::log;
 use crate::hashes::*;
 
 use crate::replacement_files::{ARC_FILES, STREAM_FILES};
-use crate::resource::{LoadedTables, ResServiceState, SubFile};
+use crate::resource::{DirectoryOffset, LoadedTables, ResServiceState, SubFile};
 
 lazy_static::lazy_static! {
     pub static ref STRATUS : Mutex<Stratus> = Mutex::new(Stratus::new());
@@ -26,19 +26,23 @@ macro_rules! stratus {
 unsafe impl Sync for Stratus {}
 
 pub struct Stratus {
-    pub individual_ctx: IndividualCtx,
     pub incoming_read: bool,
     pub incoming_inflate: bool,
     pub incoming_load_type: LoadingType,
+    pub previous_dir_entry: u32,
+    pub individual_ctx: IndividualCtx,
+    pub directory_ctx: DirectoryCtx,
 }
 
 impl Stratus {
     pub fn new() -> Self {
         Stratus {
-            individual_ctx: IndividualCtx::new(),
             incoming_read: false,
             incoming_inflate: false,
             incoming_load_type: LoadingType::Directory,
+            previous_dir_entry: 0,
+            individual_ctx: IndividualCtx::new(),
+            directory_ctx: DirectoryCtx::new(),
         }
     }
 
@@ -58,11 +62,6 @@ impl Stratus {
             );
 
             // Backup the subfile for use in ResService::InflateThreadMain
-            let file_info = loaded_tables
-                .get_arc()
-                .lookup_file_information_by_t1_index(t1_index);
-            file_info.flags ^= 0x10;
-
             let subfile = loaded_tables.get_arc().get_subfile_by_t1_index(t1_index);
             context.original_subfile = *subfile;
 
@@ -77,6 +76,45 @@ impl Stratus {
             self.incoming_read = true;
             self.incoming_load_type = LoadingType::File;
         }
+    }
+
+    pub fn handle_incoming_directory(
+        &mut self,
+        directory_offset: *const DirectoryOffset,
+        dir_list_idx: u32,
+        file_start_idx: u32,
+        file_count: u32,
+    ) {
+        let context = &mut self.directory_ctx;
+
+        // This has already been dealt with
+        if self.previous_dir_entry == dir_list_idx {
+            return;
+        }
+
+        let arc = LoadedTables::get_instance().get_arc();
+
+        let pre_dir = arc.get_directory_list_by_index(context.pre_dir_list_idx);
+        let post_dir = arc.get_directory_list_by_index(dir_list_idx);
+
+        for i in
+            post_dir.file_info_start_idx..(post_dir.file_info_start_idx + post_dir.file_info_count)
+        {
+            let file_info = arc.lookup_file_information_by_t1_index(i);
+            context.upcoming_files.push(file_info.path_index);
+
+            let hash = LoadedTables::get_instance()
+                .get_hash_from_t1_index(file_info.path_index)
+                .as_u64();
+
+            println!(
+                "[ARC::Stratus] Preparing to process {}",
+                crate::hashes::get(hash).unwrap_or(&"Unknown")
+            );
+        }
+
+        self.incoming_read = true;
+        self.incoming_load_type = LoadingType::Directory;
     }
 
     pub fn handle_file_read(
@@ -121,6 +159,19 @@ impl Stratus {
 
         self.incoming_read = false;
         ReadResult::NoIncomingRead
+    }
+
+    pub fn handle_lookup_directory(
+        &mut self,
+        dir_list_idx: u32,
+        load_type: u32,
+        other_dir_list_idx: u32,
+    ) {
+        let context = &mut self.directory_ctx;
+
+        context.pre_dir_list_idx = dir_list_idx;
+        context.pre_load_type = load_type;
+        context.pre_unk_dir_list_idx = other_dir_list_idx;
     }
 
     pub fn handle_inflate_thread_loop(&mut self) {
@@ -180,6 +231,24 @@ impl IndividualCtx {
                 decompressed_size: 0,
                 flags: 0,
             },
+        }
+    }
+}
+
+pub struct DirectoryCtx {
+    pub pre_dir_list_idx: u32,
+    pub pre_load_type: u32,
+    pub pre_unk_dir_list_idx: u32,
+    pub upcoming_files: Vec<u32>,
+}
+
+impl DirectoryCtx {
+    pub fn new() -> Self {
+        DirectoryCtx {
+            pre_dir_list_idx: 0,
+            pre_load_type: 0,
+            pre_unk_dir_list_idx: 0,
+            upcoming_files: Vec::<u32>::new(),
         }
     }
 }

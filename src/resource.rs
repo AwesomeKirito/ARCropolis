@@ -127,8 +127,8 @@ pub struct LoadedArc {
     pub file_info_path: *const FileInfoPath,
     pub file_info_idx: *const FileInfoIndex,
     pub dir_hash_group: *const (),
-    pub dir_list: *const (),
-    pub dir_offset: *const (),
+    pub dir_list: *const DirectoryList,
+    pub dir_offset: *const DirectoryOffset,
     pub dir_child_hash_group: *const (),
     // FileInfoV2
     pub file_info: *const FileInfo,
@@ -257,6 +257,16 @@ impl LoadedArc {
             unsafe { &mut *file_info_sub_index_table.offset(sub_index_index as isize) };
         file_info_sub_index
     }
+
+    pub fn get_directory_offset_by_index(&self, index: u32) -> &mut DirectoryOffset {
+        let directory_offset_table = self.dir_offset as *mut DirectoryOffset;
+        unsafe { &mut *directory_offset_table.offset(index as isize) }
+    }
+
+    pub fn get_directory_list_by_index(&self, index: u32) -> &mut DirectoryList {
+        let directory_list_table = self.dir_list as *mut DirectoryList;
+        unsafe { &mut *directory_list_table.offset(index as isize) }
+    }
 }
 
 #[repr(C)]
@@ -316,6 +326,29 @@ impl fmt::Debug for HashIndexGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{:x}", self.hash40.as_u64())
     }
+}
+
+#[repr(C)]
+pub struct DirectoryOffset {
+    pub offset: u64,
+    pub some_size: u32,
+    pub size: u32,
+    pub sub_data_start_index: u32,
+    pub sub_data_count: u32,
+    pub redirect_index: u32,
+}
+
+#[repr(C)]
+pub struct DirectoryList {
+    pub full_path: HashIndexGroup,
+    pub name: HashIndexGroup,
+    pub parent: HashIndexGroup,
+    pub extra_dis_re: HashIndexGroup,
+    pub file_info_start_idx: u32,
+    pub file_info_count: u32,
+    pub child_directory_start_idx: u32,
+    pub child_directory_count: u32,
+    pub flags: u32,
 }
 
 #[repr(packed)]
